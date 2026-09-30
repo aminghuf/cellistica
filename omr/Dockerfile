@@ -27,7 +27,7 @@ RUN mkdir -p /etc/xdg/menus /usr/share/applications /usr/share/desktop-directori
 
 RUN useradd --create-home --uid 10001 omr \
  && mkdir -p /data && chown omr:omr /data
-COPY --chown=omr:omr omr_server.py /opt/omr_server.py
+COPY --chown=omr:omr omr_server.py test_omr_server.py /opt/
 
 USER omr
 WORKDIR /home/omr

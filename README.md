@@ -75,6 +75,7 @@ sudo tailscale serve --bg --https=443 http://127.0.0.1:8088
 
 ```bash
 docker compose exec app python -m pytest -q
+docker compose exec omr python3 /opt/test_omr_server.py -v   # low-res retry logic
 # regenerate the music21-made fixtures (writes into app/tests/fixtures):
 docker compose run --rm -v "$PWD/app:/srv" --user "$(id -u)" app python -m tests.make_fixtures
 ```
@@ -128,6 +129,7 @@ Annotated files are cached per job, so upload again, or run `docker compose rest
 ## Known limitations
 
 - **OMR accuracy.** Audiveris does well on clean, engraved, digital-born PDFs. Phone photos, skewed or low-resolution scans (under ~300 dpi), handwritten parts, and dense multi-voice passages produce wrong or missing notes, rhythms, clefs and accidentals. Everything downstream inherits those errors: a missed tenor clef shifts every note that follows. For anything important, correct the `.mxl` (for example in MuseScore) and upload the MusicXML instead.
+- **Low-resolution PDFs** (for example a phone image or screenshot saved as a PDF): Audiveris refuses pages whose staff lines are under about 10 px apart. When that happens, the omr service reruns the PDF once at a higher render DPI, calculated to give an 18 px staff gap and kept under Audiveris' 20 MP page limit, and the job's `messages` says so. Upscaling can't recover detail that isn't there, so a proper 300 dpi scan still reads best. Known Audiveris failures come back as plain-language errors, with the raw log tail underneath.
 - **Multi-movement PDFs**: when Audiveris splits movements into several `.mxl` files, only the first one is shown (the job's `messages` says so).
 - **Rule-based fingering, not a teacher's.** The model knows positions, extensions, open strings, shifts and string crossings. It doesn't know about phrasing, bowing, tone colour (for example staying on the D string for a melody), expressive slides, the length of held notes, tempo, or where a shift can hide inside a slur. It never uses thumb position. Treat its output as a sensible default to pencil over, not a performance edition.
 - Double stops in two different voices are merged only when they start together. Grace notes are fingered like ordinary notes.

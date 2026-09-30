@@ -145,8 +145,9 @@ class JobStore:
         with urllib.request.urlopen(req, timeout=OMR_TIMEOUT + 60) as r:
             res = json.load(r)
         job.omr_log_tail = res.get("log_tail")
+        job.messages.extend(res.get("notes", []))
         if not res.get("ok"):
-            raise RuntimeError(f"Audiveris failed (exit {res.get('returncode')}); see omr_log_tail")
+            raise RuntimeError(explain_omr_failure(job, res.get("returncode")))
         files = res["files"]
         if len(files) > 1:
             job.messages.append(
@@ -173,6 +174,37 @@ class JobStore:
             score = sc.load(job.dir / job.source)
             part = sc.choose_part(score, part_override)
             return self._render(job, score, mode, part), part
+
+
+# Known Audiveris failure signatures -> advice a person can act on.
+_OMR_FAILURES = [
+    (
+        re.compile(r"too low interline value of (\d+) pixels"),
+        "The page resolution is too low to read (staff lines only {0} px apart). "
+        "Export or scan the page at 300 dpi or more and try again.",
+    ),
+    (
+        re.compile(r"Too large image: ([\d,]+) pixels"),
+        "The page image is too large for OMR ({0} pixels, limit 20,000,000). "
+        "Export it at a lower resolution (300 dpi is plenty).",
+    ),
+    (
+        re.compile(r"Created scores: \[\]"),
+        "Audiveris found no music staves on the page. Is this a scan of sheet music?",
+    ),
+]
+
+
+def explain_omr_failure(job: Job, returncode) -> str:
+    try:
+        log = (job.dir / "omr.log").read_text("utf-8", "replace")
+    except FileNotFoundError:
+        log = job.omr_log_tail or ""
+    for pattern, advice in _OMR_FAILURES:
+        found = pattern.findall(log)
+        if found:
+            return advice.format(found[-1])  # the last attempt is the one that counts
+    return f"Audiveris could not read this PDF (exit {returncode}). Details below."
 
 
 _SHEET = re.compile(r"\[[^\]]*?#(\d+)\]")

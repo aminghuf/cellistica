@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -24,22 +25,63 @@ DATA = Path(os.environ.get("DATA_DIR", "/data"))
 TIMEOUT = int(os.environ.get("OMR_TIMEOUT_SECONDS", "1800"))
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
+# Audiveris renders PDF pages at this DPI (its default) and rejects sheets whose
+# staff-line gap ("interline") is too small, e.g. a phone image wrapped in a PDF.
+PDF_DPI_CONSTANT = "org.audiveris.omr.image.ImageLoading.pdfResolution"
+DEFAULT_PDF_DPI = 300
+TARGET_INTERLINE = 18  # px; comfortably above Audiveris' minimum
+MAX_SHEET_PIXELS = 20_000_000  # Audiveris refuses larger sheets
+LOW_INTERLINE = re.compile(rb"too low interline value of (\d+) pixels")
+LOADED_IMAGE = re.compile(rb"Loaded image #\d+ (\d+)x(\d+)")
+
+
+def _run(cmd: list[str], log_path: Path) -> int:
+    with open(log_path, "ab") as log:
+        log.write(f"[omr] {' '.join(cmd)}\n".encode())
+        log.flush()
+        try:
+            return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=TIMEOUT).returncode
+        except subprocess.TimeoutExpired:
+            log.write(f"\n[omr] timed out after {TIMEOUT}s\n".encode())
+            return -1
+
+
+def retry_dpi(log: bytes) -> int | None:
+    """Higher PDF render DPI that would lift the interline to TARGET_INTERLINE,
+    or None if the failure wasn't a low-resolution one (or can't be helped)."""
+    m = LOW_INTERLINE.search(log)
+    if not m:
+        return None
+    factor = TARGET_INTERLINE / max(int(m.group(1)), 1)
+    size = LOADED_IMAGE.search(log)
+    if size:  # keep the re-rendered sheet under Audiveris' pixel cap
+        w, h = int(size.group(1)), int(size.group(2))
+        factor = min(factor, (MAX_SHEET_PIXELS / (w * h)) ** 0.5)
+    dpi = int(DEFAULT_PDF_DPI * factor) // 50 * 50
+    return dpi if dpi > DEFAULT_PDF_DPI else None
+
 
 def run_audiveris(job: str) -> dict:
     job_dir = DATA / "jobs" / job
     src = job_dir / "input.pdf"
     out_dir = job_dir / "omr"
     out_dir.mkdir(exist_ok=True)
-    cmd = [AUDIVERIS, "-batch", "-export", "-output", str(out_dir), "--", str(src)]
-    with open(job_dir / "omr.log", "wb") as log:
-        try:
-            rc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=TIMEOUT).returncode
-        except subprocess.TimeoutExpired:
-            rc = -1
-            log.write(f"\n[omr] timed out after {TIMEOUT}s\n".encode())
+    log_path = job_dir / "omr.log"
+    log_path.write_bytes(b"")
+    base = [AUDIVERIS, "-batch", "-export", "-output", str(out_dir)]
+    rc = _run([*base, "--", str(src)], log_path)
+    notes: list[str] = []
+
+    dpi = retry_dpi(log_path.read_bytes()) if rc != 0 else None
+    if dpi:
+        notes.append(f"The PDF's resolution was too low for OMR; re-read it at {dpi} dpi.")
+        shutil.rmtree(out_dir, ignore_errors=True)
+        out_dir.mkdir()
+        rc = _run([*base, "-constant", f"{PDF_DPI_CONSTANT}={dpi}", "--", str(src)], log_path)
+
     files = sorted(str(p.relative_to(job_dir)) for p in out_dir.rglob("*.mxl"))
-    tail = (job_dir / "omr.log").read_bytes()[-4000:].decode("utf-8", "replace")
-    return {"ok": rc == 0 and bool(files), "files": files, "returncode": rc, "log_tail": tail}
+    tail = log_path.read_bytes()[-4000:].decode("utf-8", "replace")
+    return {"ok": rc == 0 and bool(files), "files": files, "returncode": rc, "log_tail": tail, "notes": notes}
 
 
 class Handler(BaseHTTPRequestHandler):
