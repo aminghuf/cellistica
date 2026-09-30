@@ -1,0 +1,55 @@
+name: cello-reader
+
+services:
+  omr:
+    build: ./omr
+    image: cello-reader-omr:5.11.0
+    restart: unless-stopped
+    init: true  # tini as PID 1: forwards SIGTERM, reaps Audiveris children
+    environment:
+      OMR_TIMEOUT_SECONDS: "1800"
+    volumes:
+      - jobs:/data
+    # Not published: only reachable from `app` on the compose network.
+    expose:
+      - "8090"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Audiveris' launcher sets -Xmx8G; leave headroom above that.
+    mem_limit: 10g
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      start_interval: 2s
+
+  app:
+    build: ./app
+    image: cello-reader-app:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      omr:
+        condition: service_healthy
+    environment:
+      OMR_URL: http://omr:8090
+      OMR_TIMEOUT_SECONDS: "1800"
+      MAX_UPLOAD_MB: "30"
+      JOB_TTL_HOURS: "24"
+      CELLO_FINGERING_CONFIG: /config/fingering.toml
+    volumes:
+      - jobs:/data
+      - ./app/fingering.toml:/config/fingering.toml:ro
+    ports:
+      - "127.0.0.1:8088:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/app
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
+
+volumes:
+  jobs:

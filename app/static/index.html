@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Cello Reader</title>
+<style>
+  :root {
+    --bg: #faf8f5; --surface: #ffffff; --fg: #1d1b19; --muted: #6b645c;
+    --line: #e4ded6; --accent: #8a3b12; --accent-fg: #ffffff; --danger: #b3261e;
+    --music: #111111; --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151311; --surface: #1f1c19; --fg: #eee8e1; --muted: #a79e94;
+      --line: #36312c; --accent: #e59a63; --accent-fg: #1a0f08; --danger: #f2b8b5;
+      --music: #ece6df;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto;
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 48px max(16px, env(safe-area-inset-left)); }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 1.4rem; margin: 0; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); font-size: .9rem; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  #drop { display: grid; place-items: center; text-align: center; gap: 8px; min-height: 120px;
+    border: 2px dashed var(--line); cursor: pointer; transition: border-color .15s, background .15s; }
+  #drop.over, #drop:focus-visible { border-color: var(--accent); outline: none; }
+  #drop strong { font-size: 1rem; }
+  #drop small { color: var(--muted); }
+  #file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  #status { margin-top: 12px; display: none; }
+  #status.show { display: block; }
+  .status-line { display: flex; justify-content: space-between; gap: 12px; font-size: .92rem; }
+  .status-line .muted { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; width: 35%; background: var(--accent); border-radius: 3px;
+    animation: slide 1.3s ease-in-out infinite; }
+  .bar.done > i { width: 100%; animation: none; }
+  .bar.error > i { width: 100%; animation: none; background: var(--danger); }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+  @media (prefers-reduced-motion: reduce) { .bar > i { animation: none; width: 100%; opacity: .5; } }
+  #detail { margin-top: 6px; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+  #error { color: var(--danger); white-space: pre-wrap; font-size: .85rem; margin-top: 8px; overflow-wrap: anywhere; }
+  #error:empty, #detail:empty { display: none; }
+
+  .toolbar { display: none; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0 12px; }
+  .toolbar.show { display: flex; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--surface); }
+  .seg button { border: 0; background: transparent; color: var(--fg); font: inherit; font-size: .92rem;
+    padding: 7px 16px; border-radius: 999px; cursor: pointer; min-height: 36px; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+  select, .btn { font: inherit; font-size: .92rem; color: var(--fg); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; min-height: 38px; }
+  .btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .btn:hover, select:hover { border-color: var(--accent); }
+  .spacer { flex: 1; }
+  .zoom { display: inline-flex; gap: 4px; }
+  .zoom .btn { padding: 7px 12px; }
+
+  #messages { color: var(--muted); font-size: .85rem; margin: 0 0 8px; }
+  #messages:empty { display: none; }
+  #legend { color: var(--muted); font-size: .8rem; margin: 0 0 8px; }
+  #score-wrap { padding: 8px 0; overflow-x: auto; min-height: 120px; }
+  #score-wrap.loading { opacity: .5; }
+  @media (max-width: 560px) {
+    .spacer { display: none; }
+    .seg { width: 100%; }
+    .seg button { flex: 1; }
+    #score-wrap { padding: 4px 0; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Cello Reader</h1>
+    <p>PDF or MusicXML → solfège &amp; fingering</p>
+  </header>
+
+  <label id="drop" class="card" tabindex="0">
+    <strong>Drop a cello part here, or tap to choose</strong>
+    <small>PDF (runs OMR), MusicXML, .mxl or MIDI · up to 30 MB</small>
+    <input id="file" type="file" accept=".pdf,.musicxml,.xml,.mxl,.mid,.midi,application/pdf">
+  </label>
+
+  <div id="status" class="card" role="status" aria-live="polite">
+    <div class="status-line"><span id="stage">Uploading…</span><span id="elapsed" class="muted"></span></div>
+    <div class="bar" id="bar"><i></i></div>
+    <div id="detail"></div>
+    <div id="error"></div>
+  </div>
+
+  <div class="toolbar" id="toolbar">
+    <div class="seg" role="group" aria-label="Annotation">
+      <button type="button" data-mode="solfege" aria-pressed="true">Solfège</button>
+      <button type="button" data-mode="fingering" aria-pressed="false">Fingering</button>
+    </div>
+    <select id="part" aria-label="Part" hidden></select>
+    <span class="spacer"></span>
+    <div class="zoom">
+      <button class="btn" type="button" id="zoom-out" aria-label="Zoom out">−</button>
+      <button class="btn" type="button" id="zoom-in" aria-label="Zoom in">+</button>
+    </div>
+    <a class="btn" id="download" href="#">⤓ MusicXML</a>
+  </div>
+
+  <p id="messages"></p>
+  <p id="legend" hidden>Finger above the note (0 = open string) · string letter under the note · roman numeral = string (I = A … IV = C) · position shown where it changes · “?” = beyond 4th position.</p>
+  <section class="card" id="score-wrap" hidden><div id="score"></div></section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@2.1.3/build/opensheetmusicdisplay.min.js"
+        integrity="sha384-LAL3cMN74APXrcyfdSTuvzNq7R6U4ffUeOh9yyEMd9WljGOfXqFaUNQ8vpKvVhdo"
+        crossorigin="anonymous"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const MAX_MB = 30;
+  const STAGES = { queued: "Queued", omr: "Reading the PDF (Audiveris OMR)", annotating: "Annotating", done: "Ready", error: "Failed" };
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+
+  let job = null, part = null, osmd = null, zoom = null, pollTimer = null;
+  let mode = store.get("mode") === "fingering" ? "fingering" : "solfege";
+
+  // --- upload ---------------------------------------------------------------
+  const drop = $("drop"), input = $("file");
+  input.addEventListener("change", () => input.files[0] && upload(input.files[0]));
+  drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]));
+
+  function showStatus(stage, { detail = "", error = "", state = "busy", elapsed = "" } = {}) {
+    $("status").classList.add("show");
+    $("stage").textContent = stage;
+    $("detail").textContent = detail;
+    $("error").textContent = error;
+    $("elapsed").textContent = elapsed;
+    $("bar").className = "bar" + (state === "busy" ? "" : " " + state);
+  }
+
+  async function upload(file) {
+    if (file.size > MAX_MB * 1024 * 1024) {
+      return showStatus("File too large", { error: `The limit is ${MAX_MB} MB.`, state: "error" });
+    }
+    clearTimeout(pollTimer);
+    part = null;
+    $("toolbar").classList.remove("show");
+    $("score-wrap").hidden = true;
+    showStatus(`Uploading ${file.name}…`);
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const r = await fetch("convert", { method: "POST", body });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `Upload failed (${r.status})`);
+      setJob(data.id);
+    } catch (e) {
+      showStatus("Upload failed", { error: e.message, state: "error" });
+    } finally {
+      input.value = "";
+    }
+  }
+
+  function setJob(id) {
+    job = { id };
+    store.set("job", id);
+    history.replaceState(null, "", "#job=" + id);
+    poll();
+  }
+
+  // --- polling --------------------------------------------------------------
+  async function poll() {
+    let data;
+    try {
+      const r = await fetch(`jobs/${job.id}`);
+      if (r.status === 404) {
+        store.set("job", "");
+        history.replaceState(null, "", location.pathname);
+        return showStatus("Job not found", { error: "It expired or the server restarted. Upload the file again.", state: "error" });
+      }
+      data = await r.json();
+    } catch (e) {
+      pollTimer = setTimeout(poll, 3000);
+      return showStatus("Connection problem, retrying…", { error: e.message });
+    }
+    job = data;
+    const elapsed = fmtTime(data.elapsed_seconds);
+    if (data.status === "done") {
+      showStatus(`${STAGES.done}: ${data.filename}`, { state: "done", elapsed });
+      return ready();
+    }
+    if (data.status === "error") {
+      const tail = data.omr_log_tail ? "\n\n" + data.omr_log_tail.trim().split("\n").slice(-8).join("\n") : "";
+      return showStatus(STAGES.error, { error: (data.error || "Unknown error") + tail, state: "error", elapsed });
+    }
+    let detail = data.filename;
+    if (data.status === "queued" && data.queue_position > 1) detail += ` · ${data.queue_position - 1} ahead in queue`;
+    if (data.status === "omr" && data.omr_progress && data.omr_progress.sheet) detail = `Page ${data.omr_progress.sheet} · ${detail}`;
+    showStatus(STAGES[data.status] || data.status, { detail, elapsed });
+    pollTimer = setTimeout(poll, data.status === "omr" ? 2000 : 700);
+  }
+
+  function fmtTime(s) {
+    if (s == null) return "";
+    s = Math.round(s);
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  }
+
+  // --- viewer ---------------------------------------------------------------
+  function ready() {
+    $("toolbar").classList.add("show");
+    $("messages").textContent = (job.messages || []).join(" ");
+    const sel = $("part");
+    const parts = job.parts || [];
+    sel.hidden = parts.length < 2;
+    sel.innerHTML = "";
+    for (const p of parts) {
+      const o = document.createElement("option");
+      o.value = p.index;
+      o.textContent = `${p.name}${p.is_cello ? " (cello)" : ""}`;
+      sel.appendChild(o);
+    }
+    part = part ?? job.selected_part;
+    sel.value = part;
+    setMode(mode);
+  }
+
+  document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+  $("part").addEventListener("change", (e) => { part = Number(e.target.value); render(); });
+  $("zoom-in").addEventListener("click", () => setZoom(zoom * 1.15));
+  $("zoom-out").addEventListener("click", () => setZoom(zoom / 1.15));
+
+  function setMode(m) {
+    mode = m;
+    store.set("mode", m);
+    document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
+    $("legend").hidden = m !== "fingering";
+    render();
+  }
+
+  function url(download) {
+    const q = new URLSearchParams({ mode });
+    if (part != null) q.set("part", part);
+    if (download) q.set("download", "1");
+    return `jobs/${job.id}/musicxml?${q}`;
+  }
+
+  function defaultZoom() {
+    const w = $("score-wrap").clientWidth || window.innerWidth;
+    return w < 480 ? 0.55 : w < 800 ? 0.8 : 1.0;
+  }
+
+  function makeOsmd() {
+    const music = getComputedStyle(document.documentElement).getPropertyValue("--music").trim();
+    const o = new opensheetmusicdisplay.OpenSheetMusicDisplay($("score"), {
+      autoResize: true,
+      backend: "svg",
+      drawTitle: true,
+      drawComposer: false,
+      drawPartNames: false,
+      drawFingerings: true,   // OSMD hides fingerings on solo parts unless asked
+      fingeringPosition: "above",
+      drawLyrics: true,
+      defaultColorMusic: music,
+      defaultColorLabel: music,
+      defaultColorTitle: music,
+      pageBackgroundColor: "#00000000",
+    });
+    o.EngravingRules.RenderStringNumbersClassical = true;  // I II III IV
+    o.EngravingRules.DefaultColorLyrics = music;
+    return o;
+  }
+
+  let renderSeq = 0;
+  async function render() {
+    if (!job || job.status !== "done") return;
+    const seq = ++renderSeq;
+    $("download").href = url(true);
+    $("score-wrap").hidden = false;
+    $("score-wrap").classList.add("loading");
+    try {
+      const r = await fetch(url(false));
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+      const xml = await r.text();
+      if (seq !== renderSeq) return;
+      if (typeof opensheetmusicdisplay === "undefined") throw new Error("The score viewer (OpenSheetMusicDisplay) did not load from the CDN.");
+      if (!osmd) osmd = makeOsmd();
+      await osmd.load(xml);
+      if (seq !== renderSeq) return;
+      zoom = zoom ?? defaultZoom();
+      osmd.zoom = zoom;
+      osmd.render();
+    } catch (e) {
+      showStatus("Could not render the score", { error: e.message, state: "error" });
+    } finally {
+      if (seq === renderSeq) $("score-wrap").classList.remove("loading");
+    }
+  }
+
+  function setZoom(z) {
+    zoom = Math.min(2.5, Math.max(0.3, z));
+    if (osmd) { osmd.zoom = zoom; osmd.render(); }
+  }
+
+  // Re-colour the notation when the system switches light/dark.
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (osmd) { $("score").innerHTML = ""; osmd = null; render(); }
+  });
+
+  // --- restore the last job (link or reload) ---------------------------------
+  const saved = new URLSearchParams(location.hash.slice(1)).get("job") || store.get("job");
+  if (saved && /^[0-9a-f]{32}$/.test(saved)) setJob(saved);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Cost weights for the fingering search (lower total = preferred fingering).
+# Edit, then `docker compose restart app` (the file is bind-mounted read-only).
+# Units are arbitrary; only the ratios matter.
+
+[note]
+open_string = 0.0         # playing an open string
+fingered = 1.0            # any stopped note (makes open strings preferred)
+extension_back = 1.5      # 1st finger reaching back a semitone
+extension_fwd = 1.5       # whole step between fingers 1 and 2
+
+# Small per-note bias between positions, so ties go to the "usual" position.
+[position_bias]
+half = 0.15
+"1st" = 0.0
+"2nd" = 0.1
+"3rd" = 0.1
+"4th" = 0.15
+
+[shift]
+base = 2.0                # any change of position
+per_semitone = 0.5        # plus this per semitone the hand travels
+after_open_factor = 0.5   # shifting while an open string rings is easier
+after_rest_factor = 0.3   # ...and easier still across a rest or a '?' note
+
+[crossing]
+per_string = 0.3          # per string crossed between consecutive notes
+
+[chord]
+impossible_stretch = 50.0 # double stop whose stopped notes need two hand positions
